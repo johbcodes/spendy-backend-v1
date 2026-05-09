@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;color:#333">
+  <h2>Payment Received — Invoice {{invoiceNumber}}</h2>
+  <p>Hi {{firstName}},</p>
+  <p>A payment of <strong>KES {{amount}}</strong> has been recorded against invoice <strong>{{invoiceNumber}}</strong>.</p>
+  <p>Invoice is now <strong>{{statusLabel}}</strong>.<br>
+  Amount paid: KES {{amountPaid}} of KES {{total}}.</p>
+  {{#if reference}}<p>Reference: {{reference}}</p>{{/if}}
+</body>
+</html>

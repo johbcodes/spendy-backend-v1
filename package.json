@@ -1,0 +1,58 @@
+{
+  "name": "spendy-backend",
+  "version": "1.0.0",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "nodemon --exec ts-node src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "ts-node prisma/seed.ts",
+    "seed:superadmin": "ts-node src/scripts/seed-superadmin.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "spendy",
+    "expense-management",
+    "multi-tenancy"
+  ],
+  "author": "",
+  "license": "ISC",
+  "description": "Spendy Backend API - Professional multi-tenant expense management system",
+  "dependencies": {
+    "@prisma/client": "^6.19.2",
+    "@types/node-cron": "^3.0.11",
+    "africastalking": "^0.7.9",
+    "axios": "^1.16.0",
+    "bcryptjs": "^3.0.3",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.2.1",
+    "handlebars": "^4.7.9",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "node-cron": "^4.2.1",
+    "nodemailer": "^8.0.7",
+    "pusher": "^5.3.3",
+    "winston": "^3.19.0",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/handlebars": "^4.0.40",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.0.8",
+    "@types/nodemailer": "^8.0.0",
+    "nodemon": "^3.1.11",
+    "prisma": "^6.19.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}

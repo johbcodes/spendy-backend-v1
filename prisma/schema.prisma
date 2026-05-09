@@ -1,0 +1,800 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ========================================
+// ENUMS
+// ========================================
+
+enum UserRole {
+  Admin
+  Approver
+  Staff
+  StoreManager
+  Superadmin
+}
+
+enum UserStatus {
+  Active
+  Inactive
+}
+
+enum WalletType {
+  Main
+  Operations
+  Events
+  Activation
+  Personal
+}
+
+enum WalletStatus {
+  Active
+  Suspended
+}
+
+enum TransactionType {
+  TRANSFER
+  FUND
+  EXPENSE_APPROVAL
+  OUTBOUND_PAYMENT
+  TARIFF
+  REFUND
+}
+
+enum TransactionStatus {
+  Pending
+  Completed
+  Failed
+}
+
+enum ExpenseStatus {
+  Pending
+  Approved
+  Rejected
+  Paid
+}
+
+enum EventStatus {
+  Planning
+  Active
+  Completed
+  Cancelled
+  Archived
+}
+
+enum InvoiceDocumentType {
+  Quote
+  Proforma
+  Invoice
+}
+
+enum InvoiceStatus {
+  Draft
+  Sent
+  Paid
+  PartiallyPaid
+  Overdue
+  Cancelled
+}
+
+enum InventoryCondition {
+  Good
+  Damaged
+  Missing
+}
+
+enum InventoryCheckoutStatus {
+  Available
+  PartiallyCheckedOut
+  FullyCheckedOut
+}
+
+// ========================================
+// SYSTEM CONFIGURATION (global, singleton)
+// ========================================
+
+model SystemConfig {
+  id          String   @id @default(uuid())
+  // Tariff applied to outbound payments. If tariffRate > 0, rate takes precedence; otherwise tariffFlat is used.
+  tariffRate  Float    @default(0) // percentage, e.g. 0.02 = 2 %
+  tariffFlat  Float    @default(0) // flat fee in KES
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_config")
+}
+
+// ========================================
+// MULTI-TENANCY: Company Model
+// ========================================
+
+model Company {
+  id      String  @id @default(uuid())
+  name    String  @unique
+  email   String?
+  phone   String?
+  address String?
+  status  String  @default("Active") // Active, Suspended
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users                User[]
+  wallets              Wallet[]
+  transactions         Transaction[]
+  invoices             Invoice[]
+  products             Product[]
+  inventory            Inventory[]
+  inventoryCheckouts   InventoryCheckout[]
+  suppliers            Supplier[]
+  activityLogs         ActivityLog[]
+  events               Event[]
+  expenses             Expense[]
+  clients              Client[]
+  eventCategories      EventCategory[]
+  activationCategories ActivationCategory[]
+  expenseCategories    ExpenseCategory[]
+  operationCategories  OperationCategory[]
+  supplierCategories   SupplierCategory[]
+  inventoryCategories  InventoryCategory[]
+  expenseApprovals     ExpenseApproval[]
+  notifications        Notification[]
+
+  @@map("companies")
+}
+
+// ========================================
+// USER MANAGEMENT
+// ========================================
+
+model User {
+  id           String     @id @default(uuid())
+  companyId    String
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  phone        String
+  country      String
+  role         UserRole
+  status       UserStatus @default(Active)
+
+  modulesAssigned String @default("[]") // JSON array of module names
+
+  // Budget limits (for Staff)
+  dailyLimit            Float?
+  monthlyLimit          Float?
+  requiresApprovalAbove Float? // auto-approve below this threshold
+
+  profileImage String?
+  refreshToken String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  // Relations
+  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ownedWallets       Wallet[]            @relation("WalletOwner")
+  transactions       Transaction[]
+  invoices           Invoice[]
+  activityLogs       ActivityLog[]
+  createdEvents      Event[]             @relation("EventCreator")
+  ledEvents          Event[]             @relation("EventProjectLead")
+  expenses           Expense[]
+  approvals          ExpenseApproval[]   @relation("ApprovalUser")
+  notifications      Notification[]
+  inventoryCheckouts InventoryCheckout[] @relation("CheckedOutBy")
+  inventoryCheckins  InventoryCheckout[] @relation("CheckedInBy")
+
+  @@index([companyId])
+  @@index([email])
+  @@map("users")
+}
+
+// ========================================
+// WALLET SYSTEM
+// ========================================
+
+model Wallet {
+  id        String       @id @default(uuid())
+  companyId String
+  name      String
+  type      WalletType
+  balance   Float        @default(0)
+  currency  String       @default("KES")
+  ownerId   String? // only set for Personal wallets
+  isDefault Boolean      @default(false)
+  status        WalletStatus @default(Active)
+  accountNumber String?      @unique // 6-digit M-Pesa paybill account number
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner   User?   @relation("WalletOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  transactionsFrom Transaction[] @relation("FromWallet")
+  transactionsTo   Transaction[] @relation("ToWallet")
+  approvedExpenses Expense[]     @relation("ExpenseSourceWallet")
+
+  @@index([companyId])
+  @@index([ownerId])
+  @@map("wallets")
+}
+
+// ========================================
+// TRANSACTION SYSTEM
+// ========================================
+
+model Transaction {
+  id        String            @id @default(uuid())
+  companyId String
+  type      TransactionType
+  status    TransactionStatus @default(Completed)
+  amount    Float
+  tariffAmount Float          @default(0)
+
+  fromWalletId String?
+  toWalletId   String?
+
+  description String?
+  category    String?
+  reference   String?
+
+  invoiceId  String?
+  expenseId  String?
+  createdById String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  fromWallet Wallet?  @relation("FromWallet", fields: [fromWalletId], references: [id], onDelete: SetNull)
+  toWallet   Wallet?  @relation("ToWallet", fields: [toWalletId], references: [id], onDelete: SetNull)
+  createdBy  User     @relation(fields: [createdById], references: [id])
+  invoice    Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  expense    Expense? @relation(fields: [expenseId], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
+  @@index([fromWalletId])
+  @@index([toWalletId])
+  @@index([createdById])
+  @@index([invoiceId])
+  @@index([expenseId])
+  @@map("transactions")
+}
+
+// ========================================
+// INVOICE SYSTEM
+// ========================================
+
+model Invoice {
+  id            String              @id @default(uuid())
+  companyId     String
+  invoiceNumber String
+  documentType  InvoiceDocumentType @default(Invoice)
+
+  // Client
+  clientId      String?
+  clientName    String?
+  clientEmail   String?
+  clientPhone   String?
+  clientAddress String?
+
+  // Event linkage
+  eventId   String?
+  eventName String?
+
+  // Supplier
+  supplierId   String?
+  supplierName String?
+
+  // Financial
+  subtotal     Float?
+  taxRate      Float        @default(0)
+  taxAmount    Float        @default(0)
+  discount     Float        @default(0)
+  discountType String?      // percentage, fixed
+  total        Float
+  amountPaid   Float        @default(0)
+  balance      Float?
+  currency     String       @default("KES")
+
+  paymentTerms       String?
+  customPaymentTerms String?
+  status             InvoiceStatus @default(Draft)
+
+  issueDate DateTime
+  dueDate   DateTime?
+
+  lineItems Json @default("[]")
+  payments  Json @default("[]")
+
+  notes         String?
+  terms         String?
+  paymentMethod String?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  company      Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  supplier     Supplier?     @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  createdBy    User          @relation(fields: [createdById], references: [id])
+  transactions Transaction[]
+
+  @@unique([companyId, invoiceNumber])
+  @@index([companyId])
+  @@index([supplierId])
+  @@index([clientId])
+  @@index([eventId])
+  @@index([documentType])
+  @@index([status])
+  @@map("invoices")
+}
+
+// ========================================
+// PRODUCT CATALOG
+// ========================================
+
+model Product {
+  id        String  @id @default(uuid())
+  companyId String
+  name      String
+  sku       String?
+  category  String?
+  price     Float
+  cost      Float?
+  stock     Int     @default(0)
+  unit      String  @default("pcs")
+  status    String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+  @@map("products")
+}
+
+// ========================================
+// INVENTORY MANAGEMENT (Company Assets)
+// ========================================
+
+model Inventory {
+  id        String @id @default(uuid())
+  companyId String
+  name      String
+  category  String?
+  quantity  Int    @default(0)
+  unit      String @default("pcs")
+  location  String?
+
+  checkoutStatus InventoryCheckoutStatus @default(Available)
+  checkedOut     Int                     @default(0)
+
+  conditionCounts Json?
+
+  price Float?
+  cost  Float?
+  sku   String?
+
+  lastRestocked DateTime?
+  status        String    @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company   Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  checkouts InventoryCheckout[]
+
+  @@unique([companyId, sku])
+  @@index([companyId])
+  @@map("inventory")
+}
+
+// ========================================
+// INVENTORY CHECKOUT / CHECKIN
+// ========================================
+
+model InventoryCheckout {
+  id          String  @id @default(uuid())
+  companyId   String
+  inventoryId String
+  eventId     String?
+
+  checkedOutById String
+  checkedInById  String?
+
+  quantity     Int
+  conditionOut InventoryCondition  @default(Good)
+  conditionIn  InventoryCondition?
+
+  notes        String?
+  checkedOutAt DateTime            @default(now())
+  checkedInAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  inventory   Inventory @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  checkedOutBy User     @relation("CheckedOutBy", fields: [checkedOutById], references: [id])
+  checkedInBy  User?    @relation("CheckedInBy", fields: [checkedInById], references: [id])
+
+  @@index([companyId])
+  @@index([inventoryId])
+  @@index([eventId])
+  @@index([checkedOutById])
+  @@map("inventory_checkouts")
+}
+
+// ========================================
+// SUPPLIER MANAGEMENT
+// ========================================
+
+model Supplier {
+  id        String @id @default(uuid())
+  companyId String
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  status    String @default("Active")
+
+  category         String?
+  contactPerson    String?
+  paymentMethod    String?
+  servicesProvided String?
+
+  // M-Pesa
+  mpesaPhone     String?
+  paybillNumber  String?
+  paybillAccount String?
+  tillNumber     String?
+
+  // Bank
+  bankName      String?
+  accountName   String?
+  accountNumber String?
+  branchName    String?
+  swiftCode     String?
+
+  businessType String?
+  kraPin       String?
+  documents    Json    @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+  expenses Expense[]
+
+  @@index([companyId])
+  @@map("suppliers")
+}
+
+// ========================================
+// ACTIVITY LOG (Audit Trail)
+// ========================================
+
+model ActivityLog {
+  id         String  @id @default(uuid())
+  companyId  String
+  userId     String
+  action     String
+  entityType String?
+  entityId   String?
+  details    String?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+// ========================================
+// EVENT MANAGEMENT
+// ========================================
+
+model Event {
+  id            String      @id @default(uuid())
+  companyId     String
+  name          String
+  type          String
+  category      String?
+  clientId      String?
+  clientName    String?
+  brand         String?
+  projectLeadId String?
+
+  budget Float @default(0)
+  spent  Float @default(0)
+
+  startDate DateTime
+  endDate   DateTime?
+  status    EventStatus @default(Planning)
+  location  String?
+  documents Json?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company     Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy   User      @relation("EventCreator", fields: [createdById], references: [id])
+  projectLead User?     @relation("EventProjectLead", fields: [projectLeadId], references: [id])
+  expenses    Expense[]
+
+  @@index([companyId])
+  @@index([createdById])
+  @@index([projectLeadId])
+  @@index([status])
+  @@map("events")
+}
+
+// ========================================
+// EXPENSE MANAGEMENT
+// ========================================
+
+model Expense {
+  id        String @id @default(uuid())
+  companyId String
+  title     String
+
+  eventId   String?
+  eventName String?
+
+  // Source wallet selected by approver
+  sourceWalletId String?
+
+  // Financial
+  amount         Float
+  approvedAmount Float? // may differ from requested amount
+  budget         Float?
+
+  // Classification
+  category    String?
+  client      String?
+  supplierId  String? // FK to Supplier
+  isBatch     Boolean @default(false)
+  paymentMethod String?
+
+  startDate DateTime?
+  dueDate   DateTime?
+  status    ExpenseStatus @default(Pending)
+
+  needsApproval Boolean @default(false)
+  description   String?
+  receipt       String?
+
+  batchPaymentDetails Json?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy    User              @relation(fields: [createdById], references: [id])
+  event        Event?            @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  supplier     Supplier?         @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+  sourceWallet Wallet?           @relation("ExpenseSourceWallet", fields: [sourceWalletId], references: [id], onDelete: SetNull)
+  approvals    ExpenseApproval[]
+  transactions Transaction[]
+
+  @@index([companyId])
+  @@index([eventId])
+  @@index([createdById])
+  @@index([status])
+  @@index([supplierId])
+  @@map("expenses")
+}
+
+// ========================================
+// CLIENT MANAGEMENT
+// ========================================
+
+model Client {
+  id            String  @id @default(uuid())
+  companyId     String
+  itemNumber    String
+  name          String
+  contactPerson String?
+  email         String?
+  phone         String?
+  brands        Json    @default("[]")
+  status        String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, itemNumber])
+  @@index([companyId])
+  @@map("clients")
+}
+
+// ========================================
+// CATEGORY MANAGEMENT
+// ========================================
+
+model EventCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("event_categories")
+}
+
+model ActivationCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("activation_categories")
+}
+
+model ExpenseCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("expense_categories")
+}
+
+model OperationCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("operation_categories")
+}
+
+model SupplierCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("supplier_categories")
+}
+
+model InventoryCategory {
+  id          String  @id @default(uuid())
+  companyId   String
+  name        String
+  description String?
+  status      String  @default("Active")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@map("inventory_categories")
+}
+
+// ========================================
+// EXPENSE APPROVAL HISTORY
+// ========================================
+
+model ExpenseApproval {
+  id           String @id @default(uuid())
+  companyId    String
+  expenseId    String
+  approvedById String
+  action       String // Approved, Rejected
+  amount       Float
+  walletId     String?
+  notes        String?
+
+  createdAt DateTime @default(now())
+
+  company    Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  expense    Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  approvedBy User    @relation("ApprovalUser", fields: [approvedById], references: [id])
+
+  @@index([companyId])
+  @@index([expenseId])
+  @@index([approvedById])
+  @@map("expense_approvals")
+}
+
+// ========================================
+// NOTIFICATION SYSTEM
+// ========================================
+
+model Notification {
+  id         String  @id @default(uuid())
+  companyId  String
+  userId     String
+  type       String
+  title      String
+  message    String
+  entityType String?
+  entityId   String?
+  isRead     Boolean @default(false)
+  metadata   Json?
+
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
