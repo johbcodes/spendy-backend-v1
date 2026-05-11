@@ -294,7 +294,25 @@ export class ExpenseService {
     const fundAmount = data.approvedAmount ?? expense.amount;
 
     if (isApproving && !data.walletId) {
-      throw new ApiError(400, 'Source wallet is required when approving an expense');
+      // Auto-resolve wallet from event type
+      const walletType = expense.event?.type === 'Operation'
+        ? WalletType.Operations
+        : expense.event?.type === 'Activation'
+          ? WalletType.Activation
+          : WalletType.Events;
+
+      const autoWallet = await prisma.wallet.findFirst({
+        where: { companyId, type: walletType, status: 'Active' },
+      }) ?? await prisma.wallet.findFirst({
+        where: { companyId, type: WalletType.Events, status: 'Active' },
+      }) ?? await prisma.wallet.findFirst({
+        where: { companyId, type: WalletType.Main, status: 'Active' },
+      });
+
+      if (!autoWallet) {
+        throw new ApiError(400, 'No wallet available for this expense. Please contact admin to create company wallets.');
+      }
+      data.walletId = autoWallet.id;
     }
 
     return prisma.$transaction(async (tx) => {

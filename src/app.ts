@@ -141,8 +141,8 @@ app.post('/api/pusher/auth', authenticate, (req: Request, res: Response) => {
 // ── M-Pesa Callbacks — no auth, Safaricom posts directly ─────────────────────
 // Always ack 200 first, then process async so Safaricom never times out.
 
-// STK Push result
-app.post('/api/mpesa/stkpush/callback', async (req: Request, res: Response) => {
+// STK Push result (alias covers misconfigured MPESA_CALLBACK_URL pointing to /api/v1/mpesa/callback)
+app.post(['/api/mpesa/stkpush/callback', '/api/v1/mpesa/callback'], async (req: Request, res: Response) => {
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
   try {
     const result = await mpesaService.handleSTKCallback(req.body as MpesaSTKCallbackBody);

@@ -569,7 +569,16 @@ export class MpesaService {
       where: { id: fromWalletId, companyId },
     });
     if (!wallet) throw new Error("Source wallet not found");
-    if (wallet.balance < amount) throw new Error("Insufficient wallet balance");
+
+    // Fetch tariff config
+    const sysConfig = await prisma.systemConfig.findFirst();
+    const tariff = sysConfig
+      ? sysConfig.tariffRate > 0
+        ? Math.round(amount * sysConfig.tariffRate * 100) / 100
+        : sysConfig.tariffFlat
+      : 0;
+
+    if (wallet.balance < amount + tariff) throw new Error("Insufficient wallet balance");
 
     const token = await this.getAccessToken();
     const normalised = normalisePhone(phone);
@@ -601,11 +610,11 @@ export class MpesaService {
       throw new Error(`B2C rejected: ${data.ResponseDescription}`);
     }
 
-    // Optimistic debit — reversed on failure
+    // Optimistic debit (amount + tariff) — reversed on failure
     await prisma.$transaction(async (tx) => {
       await tx.wallet.update({
         where: { id: fromWalletId },
-        data: { balance: { decrement: amount } },
+        data: { balance: { decrement: amount + tariff } },
       });
 
       await tx.mpesaPayoutRequest.create({
@@ -623,6 +632,21 @@ export class MpesaService {
         },
       });
 
+      if (tariff > 0) {
+        await tx.transaction.create({
+          data: {
+            companyId,
+            type: "TARIFF" as any,
+            status: "Completed" as any,
+            amount: tariff,
+            fromWalletId,
+            expenseId,
+            description: `Platform fee on B2C payout: KES ${amount}`,
+            createdById: initiatedById,
+          },
+        });
+      }
+
       await tx.activityLog.create({
         data: {
           companyId,
@@ -630,7 +654,7 @@ export class MpesaService {
           action: "WALLET_B2C_INITIATED",
           entityType: "Wallet",
           entityId: fromWalletId,
-          details: `B2C payout initiated: KES ${amount} → ${normalised}`,
+          details: `B2C payout initiated: KES ${amount} → ${normalised}${tariff > 0 ? ` (fee: KES ${tariff})` : ''}`,
         },
       });
     });
@@ -678,7 +702,16 @@ export class MpesaService {
       where: { id: fromWalletId, companyId },
     });
     if (!wallet) throw new Error("Source wallet not found");
-    if (wallet.balance < amount) throw new Error("Insufficient wallet balance");
+
+    // Fetch tariff config
+    const sysConfig = await prisma.systemConfig.findFirst();
+    const tariff = sysConfig
+      ? sysConfig.tariffRate > 0
+        ? Math.round(amount * sysConfig.tariffRate * 100) / 100
+        : sysConfig.tariffFlat
+      : 0;
+
+    if (wallet.balance < amount + tariff) throw new Error("Insufficient wallet balance");
 
     const token = await this.getAccessToken();
     const commandId =
@@ -715,7 +748,7 @@ export class MpesaService {
     await prisma.$transaction(async (tx) => {
       await tx.wallet.update({
         where: { id: fromWalletId },
-        data: { balance: { decrement: amount } },
+        data: { balance: { decrement: amount + tariff } },
       });
 
       await tx.mpesaPayoutRequest.create({
@@ -734,6 +767,21 @@ export class MpesaService {
         },
       });
 
+      if (tariff > 0) {
+        await tx.transaction.create({
+          data: {
+            companyId,
+            type: "TARIFF" as any,
+            status: "Completed" as any,
+            amount: tariff,
+            fromWalletId,
+            expenseId,
+            description: `Platform fee on B2B payout: KES ${amount}`,
+            createdById: initiatedById,
+          },
+        });
+      }
+
       await tx.activityLog.create({
         data: {
           companyId,
@@ -741,7 +789,7 @@ export class MpesaService {
           action: "WALLET_B2B_INITIATED",
           entityType: "Wallet",
           entityId: fromWalletId,
-          details: `B2B payout initiated: KES ${amount} → ${recipient} (${type})`,
+          details: `B2B payout initiated: KES ${amount} → ${recipient} (${type})${tariff > 0 ? ` (fee: KES ${tariff})` : ''}`,
         },
       });
     });
