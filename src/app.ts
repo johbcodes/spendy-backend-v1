@@ -8,7 +8,12 @@ import prisma from './config/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestId } from './middleware/requestId';
 import logger from './utils/logger';
-import { mpesaService, MpesaCallbackBody } from './services/mpesa.service';
+import {
+  mpesaService,
+  MpesaSTKCallbackBody,
+  MpesaC2BConfirmationBody,
+  MpesaB2CResultBody,
+} from './services/mpesa.service';
 import { notificationService } from './services/notification.service';
 import { smsService } from './services/sms.service';
 import { pusherService } from './services/pusher.service';
@@ -133,44 +138,120 @@ app.post('/api/pusher/auth', authenticate, (req: Request, res: Response) => {
   }
 });
 
-// M-Pesa STK callback — no auth, Safaricom posts here
-app.post('/api/mpesa/callback', async (req: Request, res: Response) => {
-  // Acknowledge immediately so Safaricom doesn't retry
+// ── M-Pesa Callbacks — no auth, Safaricom posts directly ─────────────────────
+// Always ack 200 first, then process async so Safaricom never times out.
+
+// STK Push result
+app.post('/api/mpesa/stkpush/callback', async (req: Request, res: Response) => {
   res.json({ ResultCode: 0, ResultDesc: 'Accepted' });
-
   try {
-    const result = await mpesaService.handleCallback(req.body as MpesaCallbackBody);
+    const result = await mpesaService.handleSTKCallback(req.body as MpesaSTKCallbackBody);
     if (result) {
-      // Fetch wallet + owner to send confirmation
-      const wallet = await prisma.wallet.findUnique({
-        where: { id: result.walletId },
-        include: { owner: { select: { firstName: true, email: true, phone: true } } },
+      const mainWallet = await prisma.wallet.findFirst({
+        where: { companyId: result.companyId, type: 'Main' },
+        select: { id: true, name: true, balance: true },
       });
-      if (wallet?.owner && wallet.ownerId) {
-        const ref = (req.body as MpesaCallbackBody).Body.stkCallback.CallbackMetadata?.Item
-          .find(i => i.Name === 'MpesaReceiptNumber')?.Value as string | undefined;
+      const mpesaRef = (req.body as MpesaSTKCallbackBody)
+        .Body.stkCallback.CallbackMetadata?.Item
+        .find(i => i.Name === 'MpesaReceiptNumber')?.Value as string | undefined;
 
+      // Notify all Admins in the company
+      const admins = await prisma.user.findMany({
+        where: { companyId: result.companyId, role: 'Admin', status: 'Active' },
+        select: { id: true, phone: true },
+      });
+      for (const admin of admins) {
         notificationService
           .notifyWalletFunded(
-            wallet.companyId,
-            wallet.ownerId,
-            wallet.id,
-            wallet.name,
+            result.companyId,
+            admin.id,
+            result.walletId,
+            mainWallet?.name ?? 'Main Wallet',
             result.amount,
-            wallet.balance,
-            ref ?? 'MPESA',
+            mainWallet?.balance ?? 0,
+            mpesaRef ?? 'MPESA',
           )
-          .catch((err) => logger.error('M-Pesa notify failed', { err }));
+          .catch((err) => logger.error('STK notify failed', { err }));
 
-        if (wallet.owner.phone && ref) {
+        if (admin.phone && mpesaRef) {
           smsService
-            .notifyMpesaPayment(wallet.owner.phone, result.amount, ref)
-            .catch((err) => logger.error('M-Pesa SMS failed', { err }));
+            .notifyMpesaPayment(admin.phone, result.amount, mpesaRef)
+            .catch((err) => logger.error('STK SMS failed', { err }));
         }
       }
     }
   } catch (err) {
-    logger.error('M-Pesa callback processing error', { err });
+    logger.error('STK callback processing error', { err });
+  }
+});
+
+// C2B Validation — must respond within 5 seconds; accept all payments
+app.post('/api/mpesa/c2b/validate', (_req: Request, res: Response) => {
+  res.json({ ResultCode: '0', ResultDesc: 'Accepted' });
+});
+
+// C2B Confirmation — passive paybill payment landed
+app.post('/api/mpesa/c2b/confirm', async (req: Request, res: Response) => {
+  res.json({ ResultCode: '0', ResultDesc: 'Accepted' });
+  try {
+    const result = await mpesaService.handleC2BConfirmation(
+      req.body as MpesaC2BConfirmationBody,
+    );
+    if (result) {
+      const mainWallet = await prisma.wallet.findFirst({
+        where: { companyId: result.companyId, type: 'Main' },
+        select: { id: true, name: true, balance: true },
+      });
+      const admins = await prisma.user.findMany({
+        where: { companyId: result.companyId, role: 'Admin', status: 'Active' },
+        select: { id: true, phone: true },
+      });
+      for (const admin of admins) {
+        notificationService
+          .notifyWalletFunded(
+            result.companyId,
+            admin.id,
+            result.walletId,
+            mainWallet?.name ?? 'Main Wallet',
+            result.amount,
+            mainWallet?.balance ?? 0,
+            (req.body as MpesaC2BConfirmationBody).TransID,
+          )
+          .catch((err) => logger.error('C2B notify failed', { err }));
+
+        if (admin.phone) {
+          smsService
+            .notifyMpesaPayment(
+              admin.phone,
+              result.amount,
+              (req.body as MpesaC2BConfirmationBody).TransID,
+            )
+            .catch((err) => logger.error('C2B SMS failed', { err }));
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('C2B confirmation processing error', { err });
+  }
+});
+
+// B2C / B2B payout result
+app.post('/api/mpesa/b2c/result', async (req: Request, res: Response) => {
+  res.json({ ResultCode: '0', ResultDesc: 'Accepted' });
+  try {
+    await mpesaService.handlePayoutResult(req.body as MpesaB2CResultBody);
+  } catch (err) {
+    logger.error('B2C result processing error', { err });
+  }
+});
+
+// B2C / B2B payout timeout
+app.post('/api/mpesa/b2c/timeout', async (req: Request, res: Response) => {
+  res.json({ ResultCode: '0', ResultDesc: 'Accepted' });
+  try {
+    await mpesaService.handlePayoutTimeout(req.body as MpesaB2CResultBody);
+  } catch (err) {
+    logger.error('B2C timeout processing error', { err });
   }
 });
 

@@ -94,6 +94,25 @@ enum InventoryCheckoutStatus {
   FullyCheckedOut
 }
 
+enum MpesaTopupStatus {
+  Pending
+  Completed
+  Failed
+  Expired
+}
+
+enum PayoutType {
+  B2C
+  B2B_PAYBILL
+  B2B_TILL
+}
+
+enum PayoutStatus {
+  Pending
+  Completed
+  Failed
+}
+
 // ========================================
 // SYSTEM CONFIGURATION (global, singleton)
 // ========================================
@@ -122,6 +141,9 @@ model Company {
   address String?
   status  String  @default("Active") // Active, Suspended
 
+  // M-Pesa paybill account reference — unique per org, typed into "Account Number" field when paying
+  mpesaAccountRef String? @unique
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -146,6 +168,9 @@ model Company {
   inventoryCategories  InventoryCategory[]
   expenseApprovals     ExpenseApproval[]
   notifications        Notification[]
+  mpesaTopupRequests   MpesaTopupRequest[]
+  mpesaC2BPayments     MpesaC2BPayment[]
+  mpesaPayoutRequests  MpesaPayoutRequest[]
 
   @@map("companies")
 }
@@ -181,18 +206,20 @@ model User {
   lastLoginAt DateTime?
 
   // Relations
-  company            Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  ownedWallets       Wallet[]            @relation("WalletOwner")
-  transactions       Transaction[]
-  invoices           Invoice[]
-  activityLogs       ActivityLog[]
-  createdEvents      Event[]             @relation("EventCreator")
-  ledEvents          Event[]             @relation("EventProjectLead")
-  expenses           Expense[]
-  approvals          ExpenseApproval[]   @relation("ApprovalUser")
-  notifications      Notification[]
-  inventoryCheckouts InventoryCheckout[] @relation("CheckedOutBy")
-  inventoryCheckins  InventoryCheckout[] @relation("CheckedInBy")
+  company              Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  ownedWallets         Wallet[]             @relation("WalletOwner")
+  transactions         Transaction[]
+  invoices             Invoice[]
+  activityLogs         ActivityLog[]
+  createdEvents        Event[]              @relation("EventCreator")
+  ledEvents            Event[]              @relation("EventProjectLead")
+  expenses             Expense[]
+  approvals            ExpenseApproval[]    @relation("ApprovalUser")
+  notifications        Notification[]
+  inventoryCheckouts   InventoryCheckout[]  @relation("CheckedOutBy")
+  inventoryCheckins    InventoryCheckout[]  @relation("CheckedInBy")
+  mpesaTopupRequests   MpesaTopupRequest[]
+  mpesaPayoutRequests  MpesaPayoutRequest[]
 
   @@index([companyId])
   @@index([email])
@@ -212,8 +239,7 @@ model Wallet {
   currency  String       @default("KES")
   ownerId   String? // only set for Personal wallets
   isDefault Boolean      @default(false)
-  status        WalletStatus @default(Active)
-  accountNumber String?      @unique // 6-digit M-Pesa paybill account number
+  status    WalletStatus @default(Active)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -222,9 +248,10 @@ model Wallet {
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   owner   User?   @relation("WalletOwner", fields: [ownerId], references: [id], onDelete: SetNull)
 
-  transactionsFrom Transaction[] @relation("FromWallet")
-  transactionsTo   Transaction[] @relation("ToWallet")
-  approvedExpenses Expense[]     @relation("ExpenseSourceWallet")
+  transactionsFrom Transaction[]      @relation("FromWallet")
+  transactionsTo   Transaction[]      @relation("ToWallet")
+  approvedExpenses Expense[]          @relation("ExpenseSourceWallet")
+  payoutRequests   MpesaPayoutRequest[] @relation("PayoutFromWallet")
 
   @@index([companyId])
   @@index([ownerId])
@@ -539,6 +566,11 @@ model Event {
   location  String?
   documents Json?
 
+  // Activation-only fields (null for Event and Operation types)
+  product           String?
+  campaignName      String?
+  activationChannel String?
+
   createdById String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -552,6 +584,7 @@ model Event {
   @@index([createdById])
   @@index([projectLeadId])
   @@index([status])
+  @@index([type])
   @@map("events")
 }
 
@@ -797,4 +830,85 @@ model Notification {
   @@index([isRead])
   @@index([createdAt])
   @@map("notifications")
+}
+
+// ========================================
+// M-PESA: STK PUSH REQUESTS
+// ========================================
+
+model MpesaTopupRequest {
+  id                 String           @id @default(uuid())
+  companyId          String
+  merchantRequestId  String
+  checkoutRequestId  String           @unique
+  phone              String
+  amount             Float
+  status             MpesaTopupStatus @default(Pending)
+  mpesaReceiptNumber String?
+  failureReason      String?
+  initiatedById      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  initiatedBy User    @relation(fields: [initiatedById], references: [id])
+
+  @@index([companyId])
+  @@index([checkoutRequestId])
+  @@map("mpesa_topup_requests")
+}
+
+// ========================================
+// M-PESA: C2B PAYBILL PAYMENTS
+// ========================================
+
+model MpesaC2BPayment {
+  id              String   @id @default(uuid())
+  companyId       String
+  transactionId   String   @unique // M-Pesa TransID — idempotency key
+  transactionType String
+  amount          Float
+  msisdn          String   // payer phone number
+  billRefNumber   String   // account reference typed by payer
+  processed       Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@map("mpesa_c2b_payments")
+}
+
+// ========================================
+// M-PESA: OUTBOUND PAYOUT REQUESTS
+// ========================================
+
+model MpesaPayoutRequest {
+  id                 String       @id @default(uuid())
+  companyId          String
+  expenseId          String?
+  conversationId     String       @unique // Safaricom ConversationID
+  originatorConvId   String
+  type               PayoutType
+  amount             Float
+  recipient          String       // phone / paybill / till number
+  accountReference   String?      // for B2B paybill
+  status             PayoutStatus @default(Pending)
+  mpesaReceiptNumber String?
+  failureReason      String?
+  fromWalletId       String
+  initiatedById      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  initiatedBy User    @relation(fields: [initiatedById], references: [id])
+  fromWallet  Wallet  @relation("PayoutFromWallet", fields: [fromWalletId], references: [id])
+
+  @@index([companyId])
+  @@index([expenseId])
+  @@map("mpesa_payout_requests")
 }

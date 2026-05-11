@@ -3,6 +3,7 @@ import { ApiError } from '../middleware/errorHandler';
 import logger from '../utils/logger';
 import { WalletType, WalletStatus, TransactionType, TransactionStatus } from '@prisma/client';
 import { notificationService } from './notification.service';
+import { mpesaService, MpesaService } from './mpesa.service';
 
 const LOW_BALANCE_THRESHOLD = 1000; // KES
 
@@ -252,6 +253,150 @@ export class WalletService {
       },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  // ── M-Pesa top-up (STK push) ─────────────────────────────────────────────────
+
+  async initiateTopup(
+    companyId: string,
+    userId: string,
+    phone: string,
+    amount: number,
+  ) {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { mpesaAccountRef: true },
+    });
+    if (!company?.mpesaAccountRef) {
+      throw new ApiError(400, 'No M-Pesa account reference configured for this organisation. Contact your admin.');
+    }
+    return mpesaService.initiateSTKPush(companyId, userId, phone, amount);
+  }
+
+  async getTopupRequest(requestId: string, companyId: string) {
+    const req = await prisma.mpesaTopupRequest.findFirst({
+      where: { id: requestId, companyId },
+      select: {
+        id: true,
+        status: true,
+        amount: true,
+        phone: true,
+        mpesaReceiptNumber: true,
+        failureReason: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!req) throw new ApiError(404, 'Top-up request not found');
+    return req;
+  }
+
+  // ── Company account ref management ──────────────────────────────────────────
+
+  async getCompanyMpesaRef(companyId: string) {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { mpesaAccountRef: true },
+    });
+    if (!company) throw new ApiError(404, 'Company not found');
+    return { mpesaAccountRef: company.mpesaAccountRef };
+  }
+
+  async setCompanyMpesaRef(companyId: string, mpesaAccountRef: string) {
+    const existing = await prisma.company.findFirst({
+      where: { mpesaAccountRef, NOT: { id: companyId } },
+    });
+    if (existing) throw new ApiError(409, 'This account reference is already in use by another organisation');
+
+    return prisma.company.update({
+      where: { id: companyId },
+      data: { mpesaAccountRef },
+      select: { id: true, name: true, mpesaAccountRef: true },
+    });
+  }
+
+  async autoAssignMpesaRef(companyId: string) {
+    const company = await prisma.company.findUnique({
+      where: { id: companyId },
+      select: { mpesaAccountRef: true },
+    });
+    if (!company) throw new ApiError(404, 'Company not found');
+    if (company.mpesaAccountRef) return { mpesaAccountRef: company.mpesaAccountRef };
+
+    const ref = await MpesaService.generateUniqueAccountRef();
+
+    return prisma.company.update({
+      where: { id: companyId },
+      data: { mpesaAccountRef: ref },
+      select: { id: true, name: true, mpesaAccountRef: true },
+    });
+  }
+
+  // ── Payouts ──────────────────────────────────────────────────────────────────
+
+  async initiateB2CPayout(
+    companyId: string,
+    userId: string,
+    fromWalletId: string,
+    phone: string,
+    amount: number,
+    remarks: string,
+    expenseId?: string,
+  ) {
+    return mpesaService.initiateB2C(
+      companyId,
+      userId,
+      fromWalletId,
+      phone,
+      amount,
+      remarks,
+      expenseId,
+    );
+  }
+
+  async initiateB2BPayout(
+    companyId: string,
+    userId: string,
+    fromWalletId: string,
+    type: 'B2B_PAYBILL' | 'B2B_TILL',
+    recipient: string,
+    amount: number,
+    accountReference: string,
+    remarks: string,
+    expenseId?: string,
+  ) {
+    return mpesaService.initiateB2B(
+      companyId,
+      userId,
+      fromWalletId,
+      type,
+      recipient,
+      amount,
+      accountReference,
+      remarks,
+      expenseId,
+    );
+  }
+
+  async getPayoutRequest(requestId: string, companyId: string) {
+    const req = await prisma.mpesaPayoutRequest.findFirst({
+      where: { id: requestId, companyId },
+      select: {
+        id: true,
+        status: true,
+        type: true,
+        amount: true,
+        recipient: true,
+        accountReference: true,
+        mpesaReceiptNumber: true,
+        failureReason: true,
+        expenseId: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!req) throw new ApiError(404, 'Payout request not found');
+    return req;
   }
 }
 

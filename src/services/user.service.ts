@@ -3,7 +3,6 @@ import { hashPassword } from '../utils/password';
 import { ApiError } from '../middleware/errorHandler';
 import logger from '../utils/logger';
 import { UserRole, UserStatus, WalletType, WalletStatus } from '@prisma/client';
-import { MpesaService } from './mpesa.service';
 import { emailService } from './email.service';
 
 interface CreateUserData {
@@ -121,7 +120,6 @@ export class UserService {
       },
     });
 
-    const accountNumber = await MpesaService.generateUniqueAccountNumber();
     await prisma.wallet.create({
       data: {
         companyId,
@@ -132,7 +130,6 @@ export class UserService {
         currency: 'KES',
         isDefault: false,
         status: WalletStatus.Active,
-        accountNumber,
       },
     });
 

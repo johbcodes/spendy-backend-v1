@@ -27,7 +27,13 @@ const envSchema = z.object({
   MPESA_CONSUMER_SECRET: z.string().optional(),
   MPESA_SHORTCODE: z.string().optional(),
   MPESA_PASSKEY: z.string().optional(),
-  MPESA_CALLBACK_URL: z.string().optional(),
+  MPESA_CALLBACK_URL: z.string().optional(),          // STK push result URL
+  MPESA_C2B_VALIDATION_URL: z.string().optional(),    // C2B validation URL
+  MPESA_C2B_CONFIRMATION_URL: z.string().optional(),  // C2B confirmation URL
+  MPESA_B2C_RESULT_URL: z.string().optional(),        // B2C result URL
+  MPESA_B2C_TIMEOUT_URL: z.string().optional(),       // B2C timeout URL
+  MPESA_INITIATOR_NAME: z.string().optional(),        // B2C initiator (API operator username)
+  MPESA_SECURITY_CREDENTIAL: z.string().optional(),   // encrypted initiator password (pre-generated)
   MPESA_ENV: z.enum(['sandbox', 'production']).default('sandbox'),
 
   // Email (SMTP)

@@ -1,4 +1,4 @@
-﻿import { Router } from 'express';
+import { Router } from 'express';
 import { WalletController } from '../controllers/wallet.controller';
 import { authenticate, authorize } from '../middleware/auth';
 import { enforceTenancy } from '../middleware/tenancy';
@@ -8,63 +8,101 @@ import {
   updateWalletSchema,
   fundWalletSchema,
   transferSchema,
+  topupSchema,
+  setMpesaRefSchema,
+  b2cPayoutSchema,
+  b2bPayoutSchema,
 } from '../validators/wallet.validator';
 
 const router = Router();
 const walletController = new WalletController();
 
-// All routes require authentication and tenancy enforcement
 router.use(authenticate, enforceTenancy);
 
-// Get all wallets (all roles)
+// ── Wallets CRUD ─────────────────────────────────────────────────────────────
 router.get('/', walletController.getAllWallets.bind(walletController));
-
-// Get wallet by ID (all roles)
 router.get('/:id', walletController.getWalletById.bind(walletController));
-
-// Get wallet transactions (all roles)
 router.get('/:id/transactions', walletController.getWalletTransactions.bind(walletController));
 
-// Create wallet (Admin, Store Manager)
 router.post(
   '/',
   authorize('Admin', 'StoreManager'),
   validate(createWalletSchema),
-  walletController.createWallet.bind(walletController)
+  walletController.createWallet.bind(walletController),
 );
-
-// Update wallet (Admin, Store Manager)
 router.patch(
   '/:id',
   authorize('Admin', 'StoreManager'),
   validate(updateWalletSchema),
-  walletController.updateWallet.bind(walletController)
+  walletController.updateWallet.bind(walletController),
 );
-
-// Delete wallet (Admin, Store Manager)
 router.delete(
   '/:id',
   authorize('Admin', 'StoreManager'),
-  walletController.deleteWallet.bind(walletController)
+  walletController.deleteWallet.bind(walletController),
 );
 
-// Fund wallet (Admin, Store Manager, Approver)
+// ── Manual fund ──────────────────────────────────────────────────────────────
 router.post(
   '/:id/fund',
   authorize('Admin', 'StoreManager', 'Approver'),
   validate(fundWalletSchema),
-  walletController.fundWallet.bind(walletController)
+  walletController.fundWallet.bind(walletController),
 );
 
-// Transfer between wallets (Admin, Store Manager, Approver)
+// ── Internal transfer ────────────────────────────────────────────────────────
 router.post(
   '/transfer',
   authorize('Admin', 'StoreManager', 'Approver'),
   validate(transferSchema),
-  walletController.transfer.bind(walletController)
+  walletController.transfer.bind(walletController),
 );
 
-// Initiate M-Pesa STK push top-up for a wallet (all authenticated users)
-router.post('/:id/topup', walletController.initiateTopup.bind(walletController));
+// ── M-Pesa top-up (STK push) — any authenticated user can top up ─────────────
+router.post(
+  '/topup',
+  validate(topupSchema),
+  walletController.initiateTopup.bind(walletController),
+);
+router.get(
+  '/topup-requests/:requestId',
+  walletController.getTopupStatus.bind(walletController),
+);
+
+// ── Company M-Pesa account reference ─────────────────────────────────────────
+router.get(
+  '/mpesa-ref',
+  walletController.getMpesaRef.bind(walletController),
+);
+router.put(
+  '/mpesa-ref',
+  authorize('Admin'),
+  validate(setMpesaRefSchema),
+  walletController.setMpesaRef.bind(walletController),
+);
+router.post(
+  '/mpesa-ref/auto-assign',
+  authorize('Admin'),
+  walletController.autoAssignMpesaRef.bind(walletController),
+);
+
+// ── Payouts ──────────────────────────────────────────────────────────────────
+router.post(
+  '/payouts/b2c',
+  authorize('Admin', 'Approver'),
+  validate(b2cPayoutSchema),
+  walletController.initiateB2CPayout.bind(walletController),
+);
+router.post(
+  '/payouts/b2b',
+  authorize('Admin', 'Approver'),
+  validate(b2bPayoutSchema),
+  walletController.initiateB2BPayout.bind(walletController),
+);
+router.get(
+  '/payout-requests/:requestId',
+  authorize('Admin', 'Approver'),
+  walletController.getPayoutStatus.bind(walletController),
+);
 
 export default router;

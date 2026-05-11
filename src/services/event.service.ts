@@ -71,6 +71,9 @@ export class EventService {
         status: data.status ?? EventStatus.Planning,
         location: data.location,
         documents: data.documents ?? [],
+        product: data.product,
+        campaignName: data.campaignName,
+        activationChannel: data.activationChannel,
       },
       include: {
         createdBy: {
@@ -101,6 +104,9 @@ export class EventService {
     if (data.status !== undefined) updateData.status = data.status;
     if (data.location !== undefined) updateData.location = data.location;
     if (data.documents !== undefined) updateData.documents = data.documents;
+    if (data.product !== undefined) updateData.product = data.product;
+    if (data.campaignName !== undefined) updateData.campaignName = data.campaignName;
+    if (data.activationChannel !== undefined) updateData.activationChannel = data.activationChannel;
 
     return prisma.event.update({
       where: { id: eventId },

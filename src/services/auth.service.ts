@@ -54,6 +54,7 @@ export class AuthService {
     });
 
     await this.createDefaultWallets(company.id, company.name, user.id, `${user.firstName} ${user.lastName}`);
+    await this.seedDefaultCategories(company.id);
 
     const tokenPayload = {
       userId: user.id,
@@ -216,7 +217,6 @@ export class AuthService {
     ];
 
     for (const def of walletDefs) {
-      const accountNumber = await MpesaService.generateUniqueAccountNumber();
       await prisma.wallet.create({
         data: {
           companyId,
@@ -227,11 +227,39 @@ export class AuthService {
           currency: 'KES',
           isDefault: def.isDefault,
           status: WalletStatus.Active,
-          accountNumber,
         },
       });
     }
 
+    // Assign a unique M-Pesa account reference to the company (used for all top-ups)
+    const mpesaAccountRef = await MpesaService.generateUniqueAccountRef();
+    await prisma.company.update({
+      where: { id: companyId },
+      data: { mpesaAccountRef },
+    });
+
     logger.info(`Default wallets created for company: ${companyName}`);
+  }
+
+  private async seedDefaultCategories(companyId: string) {
+    const defaults: Record<string, string[]> = {
+      event: ['Corporate', 'Social', 'Conference', 'Exhibition', 'Gala & Awards'],
+      activation: ['Brand Activation', 'Product Launch', 'Sampling Campaign', 'Experiential', 'Trade Show'],
+      expense: ['Accommodation', 'Transport', 'Catering', 'Equipment Hire', 'Labour', 'Marketing Materials', 'Venue'],
+      operation: ['Logistics', 'Administration', 'Maintenance', 'Utilities', 'Office Supplies'],
+      supplier: ['Venue', 'Catering', 'Transport', 'AV & Technology', 'Printing', 'Security', 'Staffing'],
+      inventory: ['Equipment', 'Furniture', 'Electronics', 'Branded Items', 'Tents & Structures', 'Décor'],
+    };
+
+    await Promise.all([
+      ...defaults.event.map(name => prisma.eventCategory.create({ data: { companyId, name } })),
+      ...defaults.activation.map(name => prisma.activationCategory.create({ data: { companyId, name } })),
+      ...defaults.expense.map(name => prisma.expenseCategory.create({ data: { companyId, name } })),
+      ...defaults.operation.map(name => prisma.operationCategory.create({ data: { companyId, name } })),
+      ...defaults.supplier.map(name => prisma.supplierCategory.create({ data: { companyId, name } })),
+      ...defaults.inventory.map(name => prisma.inventoryCategory.create({ data: { companyId, name } })),
+    ]);
+
+    logger.info(`Default categories seeded for company: ${companyId}`);
   }
 }

@@ -21,6 +21,10 @@ export const createEventSchema = z.object({
   status: z.nativeEnum(EventStatus).default(EventStatus.Planning),
   location: z.string().optional(),
   documents: z.array(documentSchema).optional(),
+  // Activation-only fields
+  product: z.string().optional(),
+  campaignName: z.string().optional(),
+  activationChannel: z.string().optional(),
 });
 
 export const updateEventSchema = z.object({
@@ -37,6 +41,10 @@ export const updateEventSchema = z.object({
   status: z.nativeEnum(EventStatus).optional(),
   location: z.string().optional(),
   documents: z.array(documentSchema).optional(),
+  // Activation-only fields
+  product: z.string().optional(),
+  campaignName: z.string().optional(),
+  activationChannel: z.string().optional(),
 });
 
 export const getEventsQuerySchema = z.object({

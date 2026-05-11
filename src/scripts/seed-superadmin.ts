@@ -11,7 +11,6 @@ import '../config/env'; // validate env first
 import prisma from '../config/database';
 import { hashPassword } from '../utils/password';
 import { UserRole, UserStatus, WalletType, WalletStatus } from '@prisma/client';
-import { MpesaService } from '../services/mpesa.service';
 
 const PLATFORM_COMPANY = 'Spendy Platform';
 const EMAIL = process.env.SUPERADMIN_EMAIL ?? 'superadmin@spendy.app';
@@ -31,7 +30,6 @@ async function main() {
     console.log(`Superadmin already exists: ${EMAIL}`);
   } else {
     const passwordHash = await hashPassword(PASSWORD);
-    const accountNumber = await MpesaService.generateUniqueAccountNumber();
     const user = await prisma.user.create({
       data: {
         companyId: company.id,
@@ -57,7 +55,6 @@ async function main() {
         currency: 'KES',
         isDefault: false,
         status: WalletStatus.Active,
-        accountNumber,
       },
     });
 
